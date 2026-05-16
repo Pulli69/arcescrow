@@ -1,0 +1,12 @@
+{
+  "network": "arcTestnet",
+  "chainId": 5042002,
+  "rpc": "https://rpc.testnet.arc.network",
+  "contracts": {
+    "arcEscrow": "0x524b8b280b6AE21e33d9E8C345edb2Cf1599a1c4",
+    "usdc": "0x521c664E0FA980625b7cECCc75A7A3b99050e255"
+  },
+  "deployer": "0xcCD95cB6C1e495752CE4ff3854085B9a9a9822D0",
+  "deployedAt": "2026-05-16T06:39:14.256Z",
+  "blockExplorer": "https://testnet.arcscan.app"
+}
