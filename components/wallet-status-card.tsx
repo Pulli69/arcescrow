@@ -10,27 +10,53 @@ import {
   ArrowDownLeft,
   Check,
   WifiOff,
+  AlertCircle,
+  Coins,
+  Loader2,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useWallet } from '@/providers/wallet-provider'
 import { useOnChainTasks } from '@/hooks/useEscrowContract'
+import { useToast } from '@/hooks/use-toast'
 
 function shortAddress(addr: string) {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`
 }
 
 export function WalletStatusCard() {
-  const { address, balance, isConnected, isOnArcTestnet, walletType } = useWallet()
+  const { address, balance, tokenBalance, isConnected, isOnArcTestnet, walletType, mintMockUSDC } = useWallet()
   const { stats } = useOnChainTasks()
+  const { toast } = useToast()
   const [copied, setCopied] = useState(false)
+  const [isMinting, setIsMinting] = useState(false)
 
   const handleCopy = () => {
     if (!address) return
     navigator.clipboard.writeText(address)
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
+  }
+
+  const handleMintUSDC = async () => {
+    try {
+      setIsMinting(true)
+      await mintMockUSDC()
+      toast({
+        title: "Success!",
+        description: "1,000 Mock USDC minted successfully to your wallet.",
+      })
+    } catch (err: any) {
+      console.error(err)
+      toast({
+        title: "Failed to mint USDC",
+        description: err.message || "An unexpected error occurred.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsMinting(false)
+    }
   }
 
   if (!isConnected) {
@@ -104,16 +130,66 @@ export function WalletStatusCard() {
 
       <CardContent className="space-y-4 relative">
         <div className="grid gap-4">
-          <div className="space-y-1">
-            <p className="text-xs text-muted-foreground">Balance</p>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-semibold tracking-tight">
-                {balance ?? '—'}
-              </span>
-              <span className="text-sm text-muted-foreground">ARC</span>
+          <div className="space-y-4">
+            {/* ERC20 USDC Token Balance */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-muted-foreground font-medium">USDC Token Balance</p>
+                <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-400 border-emerald-500/20 py-0 px-1.5">
+                  Escrow Token
+                </Badge>
+              </div>
+              <div className="flex items-baseline justify-between">
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-3xl font-bold tracking-tight text-emerald-400">
+                    {tokenBalance ?? '0.00'}
+                  </span>
+                  <span className="text-sm font-semibold text-emerald-500/80">USDC</span>
+                </div>
+                
+                {isOnArcTestnet && (
+                  <Button 
+                    variant="outline" 
+                    className="h-7 px-2.5 py-1 text-xs border-emerald-500/30 text-emerald-400 bg-emerald-500/5 hover:bg-emerald-500/10 hover:text-emerald-300 transition-all"
+                    onClick={handleMintUSDC}
+                    disabled={isMinting}
+                  >
+                    {isMinting ? (
+                      <Loader2 className="size-3 animate-spin mr-1" />
+                    ) : (
+                      <Coins className="size-3 mr-1" />
+                    )}
+                    Faucet
+                  </Button>
+                )}
+              </div>
             </div>
-            {isOnArcTestnet && (
-              <p className="text-xs text-muted-foreground">Arc Testnet</p>
+
+            {/* Native Gas Balance */}
+            <div className="space-y-1 pt-1 border-t border-border/20">
+              <p className="text-xs text-muted-foreground font-medium">Gas Balance (Native)</p>
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-lg font-medium text-foreground/80">
+                  {balance ?? '—'}
+                </span>
+                <span className="text-xs text-muted-foreground">USDC (Gas)</span>
+              </div>
+              {isOnArcTestnet && (
+                <p className="text-[10px] text-muted-foreground/60">Arc Testnet Native Token</p>
+              )}
+            </div>
+            
+            {/* Alert if token balance is 0 */}
+            {isOnArcTestnet && (!tokenBalance || parseFloat(tokenBalance) === 0) && (
+              <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-300 space-y-1.5">
+                <p className="font-semibold flex items-center gap-1.5 text-amber-400">
+                  <AlertCircle className="size-3.5 shrink-0" />
+                  No Escrow USDC Tokens
+                </p>
+                <p className="text-muted-foreground text-[11px] leading-relaxed">
+                  Your wallet has native gas, but you need **ERC20 USDC tokens** to fund escrow contracts. Click the **Faucet** button above to get 1,000 test tokens!
+                </p>
+              </div>
             )}
           </div>
 
@@ -162,3 +238,4 @@ export function WalletStatusCard() {
     </Card>
   )
 }
+

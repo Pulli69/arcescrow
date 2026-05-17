@@ -102,8 +102,37 @@ export function useBlockchain() {
 }
 
 // ============================================================
+// APPROVE USDC (Hook)
+// ============================================================
+export function useApproveUSDC() {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<BlockchainError | null>(null)
+
+  const approve = useCallback(async (amountUSdc: string): Promise<ethers.ContractTransactionReceipt> => {
+    setLoading(true)
+    setError(null)
+
+    try {
+      const { usdc } = await getContractInstances()
+      const parsedAmount = ethers.parseUnits(amountUSdc, 6) // USDC has 6 decimals
+      const tx = await usdc.approve(CONTRACT_ADDRESS, parsedAmount)
+      return await tx.wait()
+    } catch (err: any) {
+      console.error("USDC Approve failed:", err)
+      const blockchainError = parseBlockchainError(err)
+      setError(blockchainError)
+      throw blockchainError
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  return { approve, loading, error }
+}
+
+// ============================================================
 // CREATE TASK (Hook)
-// Handles USDC approval and task creation on Arc Testnet
+// Handles task creation on Arc Testnet (assumes USDC is approved)
 // ============================================================
 export function useCreateTask() {
   const [loading, setLoading] = useState(false)
@@ -115,14 +144,10 @@ export function useCreateTask() {
       setError(null)
 
       try {
-        const { arcEscrow, usdc } = await getContractInstances()
+        const { arcEscrow } = await getContractInstances()
         const parsedAmount = ethers.parseUnits(amountUSdc, 6) // USDC has 6 decimals
 
-        // 1. Approve Contract to spend USDC
-        const approveTx = await usdc.approve(CONTRACT_ADDRESS, parsedAmount)
-        await approveTx.wait()
-
-        // 2. Create Task on-chain
+        // Create Task on-chain
         const deadlineTimestamp = Math.floor(Date.now() / 1000) + deadlineDays * 24 * 60 * 60
         const tx = await arcEscrow.createTask(workerAddress, parsedAmount, deadlineTimestamp)
         const receipt = await tx.wait()
@@ -136,7 +161,7 @@ export function useCreateTask() {
               break
             }
           } catch (e) {
-            // Ignore logs that belong to other contracts (like USDC)
+            // Ignore logs that belong to other contracts
           }
         }
         

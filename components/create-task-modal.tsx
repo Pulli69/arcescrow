@@ -1,19 +1,20 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { useCreateTask } from '@/hooks/useBlockchain'
+import { useCreateTask, useApproveUSDC } from '@/hooks/useBlockchain'
 import { taskService } from '@/lib/services/taskService'
 import { profileService } from '@/lib/services/profileService'
 import { useWallet } from '@/providers/wallet-provider'
 import { useTransactionFeedback } from '@/hooks/useTransactionFeedback'
-import { Loader2 } from 'lucide-react'
+import { Loader2, AlertCircle } from 'lucide-react'
 import { ethers } from 'ethers'
+import { getContractInstances, CONTRACT_ADDRESS } from '@/lib/contracts'
 
 interface CreateTaskModalProps {
   isOpen: boolean
@@ -25,9 +26,12 @@ export function CreateTaskModal({ isOpen, onClose, onSuccess }: CreateTaskModalP
   const router = useRouter()
   const { address } = useWallet()
   const { createTask } = useCreateTask()
+  const { approve } = useApproveUSDC()
   const { showPendingToast, showSuccessToast, showErrorToast } = useTransactionFeedback()
 
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [allowance, setAllowance] = useState<string>('0')
+  const [checkingAllowance, setCheckingAllowance] = useState(false)
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -35,6 +39,30 @@ export function CreateTaskModal({ isOpen, onClose, onSuccess }: CreateTaskModalP
     amountUSdc: '',
     deadlineDays: '7',
   })
+
+  const fetchAllowance = useCallback(async () => {
+    if (!address || !isOpen) return
+    try {
+      setCheckingAllowance(true)
+      const { usdc } = await getContractInstances()
+      const rawAllowance = await usdc.allowance(address, CONTRACT_ADDRESS)
+      const decimals = await usdc.decimals()
+      const formatted = ethers.formatUnits(rawAllowance, decimals)
+      setAllowance(formatted)
+    } catch (err) {
+      console.error("Error fetching allowance:", err)
+    } finally {
+      setCheckingAllowance(false)
+    }
+  }, [address, isOpen])
+
+  useEffect(() => {
+    if (isOpen && address) {
+      fetchAllowance()
+    }
+  }, [isOpen, address, fetchAllowance])
+
+  const needsApproval = parseFloat(formData.amountUSdc || '0') > parseFloat(allowance)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -63,11 +91,32 @@ export function CreateTaskModal({ isOpen, onClose, onSuccess }: CreateTaskModalP
       return
     }
 
+    // Step 1: Approve USDC if needed
+    if (needsApproval) {
+      try {
+        setIsSubmitting(true)
+        const pendingToast = showPendingToast()
+        
+        await approve(formData.amountUSdc)
+        
+        pendingToast.dismiss()
+        showSuccessToast('USDC Approved Successfully!', '')
+        await fetchAllowance()
+      } catch (error: any) {
+        console.error(error)
+        showErrorToast('Failed to approve USDC', error)
+      } finally {
+        setIsSubmitting(false)
+      }
+      return
+    }
+
+    // Step 2: Create Task on-chain & Sync
     try {
       setIsSubmitting(true)
       const pendingToast = showPendingToast()
 
-      // 1. Blockchain Transaction (Approve USDC + Create Task)
+      // Blockchain Transaction (Create Task)
       const { receipt, taskId } = await createTask(
         finalWorkerAddress,
         formData.amountUSdc,
@@ -78,7 +127,7 @@ export function CreateTaskModal({ isOpen, onClose, onSuccess }: CreateTaskModalP
         throw new Error('Failed to parse Task ID from blockchain events')
       }
 
-      // 2. Map wallet addresses to Supabase Profile UUIDs
+      // Map wallet addresses to Supabase Profile UUIDs
       const creatorProfile = await profileService.ensureProfile(address)
       let workerProfileId = null
       if (finalWorkerAddress !== ethers.ZeroAddress) {
@@ -86,7 +135,7 @@ export function CreateTaskModal({ isOpen, onClose, onSuccess }: CreateTaskModalP
         workerProfileId = workerProfile.id
       }
 
-      // 3. Sync with Supabase
+      // Sync with Supabase
       const metadata = await taskService.createTask({
         task_id: taskId,
         chain_id: 5042002, // Arc Testnet
@@ -103,10 +152,6 @@ export function CreateTaskModal({ isOpen, onClose, onSuccess }: CreateTaskModalP
         status: 'open',
         tags: [],
       })
-
-      // We actually need to assign the worker by wallet address. 
-      // Supabase tasks_metadata requires creator_id and worker_id as UUIDs matching profiles.
-      // We will handle profile matching in the backend/taskService in a more robust app.
       
       pendingToast.dismiss()
       showSuccessToast('Task Created Successfully!', receipt.hash)
@@ -210,6 +255,19 @@ export function CreateTaskModal({ isOpen, onClose, onSuccess }: CreateTaskModalP
             </div>
           </div>
 
+          {/* Status step explanation for multi-step approval on mobile */}
+          {needsApproval && formData.amountUSdc && parseFloat(formData.amountUSdc) > 0 && (
+            <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-3 text-xs text-blue-300 space-y-1">
+              <p className="font-semibold flex items-center gap-1.5 text-blue-400">
+                <AlertCircle className="size-3.5 shrink-0" />
+                Step 1: Approve USDC Token Allowance
+              </p>
+              <p className="text-muted-foreground text-[11px] leading-relaxed">
+                Before creating the escrow, you must authorize the smart contract to interact with your USDC. Please click **Approve USDC** first, then click **Create & Fund** once the allowance updates.
+              </p>
+            </div>
+          )}
+
           <div className="pt-4 flex items-center justify-end gap-3">
             <Button
               type="button"
@@ -221,7 +279,7 @@ export function CreateTaskModal({ isOpen, onClose, onSuccess }: CreateTaskModalP
             </Button>
             <Button
               type="submit"
-              disabled={isSubmitting}
+              disabled={isSubmitting || checkingAllowance}
               className="bg-primary hover:bg-primary/90 text-primary-foreground min-w-[120px]"
             >
               {isSubmitting ? (
@@ -229,6 +287,8 @@ export function CreateTaskModal({ isOpen, onClose, onSuccess }: CreateTaskModalP
                   <Loader2 className="mr-2 size-4 animate-spin" />
                   Confirming
                 </>
+              ) : needsApproval ? (
+                'Approve USDC'
               ) : (
                 'Create & Fund'
               )}

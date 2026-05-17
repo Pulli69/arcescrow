@@ -7,7 +7,14 @@ import React, {
     useEffect,
     useState,
 } from 'react'
-import { BrowserProvider, formatEther } from 'ethers'
+import { BrowserProvider, formatEther, Contract, parseUnits } from 'ethers'
+
+const USDC_ADDRESS = process.env.NEXT_PUBLIC_USDC_ADDRESS!
+const USDC_ABI = [
+    "function balanceOf(address account) external view returns (uint256)",
+    "function decimals() external view returns (uint8)",
+    "function mint(address to, uint256 amount) external"
+]
 
 // Arc Testnet chain configuration
 export const ARC_TESTNET = {
@@ -23,6 +30,7 @@ export type WalletType = 'metamask' | 'rabby'
 export interface WalletContextValue {
     address: string | null
     balance: string | null
+    tokenBalance: string | null
     chainId: number | null
     isConnected: boolean
     isConnecting: boolean
@@ -32,6 +40,7 @@ export interface WalletContextValue {
     disconnect: () => void
     switchToArcTestnet: () => Promise<void>
     refreshBalance: () => Promise<void>
+    mintMockUSDC: () => Promise<void>
 }
 
 const WalletContext = createContext<WalletContextValue | null>(null)
@@ -46,6 +55,7 @@ function getProvider(): any {
 export function WalletProvider({ children }: { children: React.ReactNode }) {
     const [address, setAddress] = useState<string | null>(null)
     const [balance, setBalance] = useState<string | null>(null)
+    const [tokenBalance, setTokenBalance] = useState<string | null>(null)
     const [chainId, setChainId] = useState<number | null>(null)
     const [isConnecting, setIsConnecting] = useState(false)
     const [walletType, setWalletType] = useState<WalletType | null>(null)
@@ -58,15 +68,52 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
             const provider = getProvider()
             if (!provider) return
             const ethersProvider = new BrowserProvider(provider)
+            
+            // Fetch native balance
             const raw = await ethersProvider.getBalance(addr)
             setBalance(parseFloat(formatEther(raw)).toFixed(4))
-        } catch {
+
+            // Fetch ERC20 USDC balance
+            if (USDC_ADDRESS) {
+                const contract = new Contract(USDC_ADDRESS, USDC_ABI, ethersProvider)
+                const bal = await contract.balanceOf(addr)
+                const dec = await contract.decimals()
+                const formatted = (Number(bal) / Math.pow(10, Number(dec))).toFixed(2)
+                setTokenBalance(formatted)
+            } else {
+                setTokenBalance('0.00')
+            }
+        } catch (err) {
+            console.error("fetchBalance error:", err)
             setBalance('0.0000')
+            setTokenBalance('0.00')
         }
     }, [])
 
     const refreshBalance = useCallback(async () => {
         if (address) await fetchBalance(address)
+    }, [address, fetchBalance])
+
+    const mintMockUSDC = useCallback(async () => {
+        if (!address) throw new Error('Wallet not connected')
+        const provider = getProvider()
+        if (!provider) throw new Error('No wallet provider found')
+        
+        try {
+            const ethersProvider = new BrowserProvider(provider)
+            const signer = await ethersProvider.getSigner()
+            const contract = new Contract(USDC_ADDRESS, USDC_ABI, signer)
+            
+            // Mint 1,000 USDC (6 decimals)
+            const amount = parseUnits('1000', 6)
+            const tx = await contract.mint(address, amount)
+            await tx.wait()
+            
+            await fetchBalance(address)
+        } catch (err: any) {
+            console.error('Failed to mint USDC:', err)
+            throw err
+        }
     }, [address, fetchBalance])
 
     const connect = useCallback(async (type: WalletType) => {
@@ -107,6 +154,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     const disconnect = useCallback(() => {
         setAddress(null)
         setBalance(null)
+        setTokenBalance(null)
         setChainId(null)
         setWalletType(null)
         localStorage.removeItem('wallet_connected')
@@ -193,6 +241,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
             value={{
                 address,
                 balance,
+                tokenBalance,
                 chainId,
                 isConnected,
                 isConnecting,
@@ -202,6 +251,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
                 disconnect,
                 switchToArcTestnet,
                 refreshBalance,
+                mintMockUSDC,
             }}
         >
             {children}
